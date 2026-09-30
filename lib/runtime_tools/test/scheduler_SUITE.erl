@@ -2,7 +2,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 2018-2025. All Rights Reserved.
+%% Copyright Ericsson AB 2018-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -26,10 +26,12 @@
 
 %% Test cases
 -export([basic/1,
-         utilization_disable/1]).
+         utilization_disable/1,
+         weighted_utilization/1]).
 
 all() -> [basic,
-          utilization_disable].
+          utilization_disable,
+          weighted_utilization].
 
 
 suite() -> [{ct_hooks,[ts_install_cth]}].
@@ -78,6 +80,43 @@ utilization_disable(_Config) ->
 
     undefined = scheduler:get_sample(),
     ok.
+
+
+weighted_utilization(_Config) ->
+    _ = erlang:system_flag(scheduler_wall_time, true),
+    try
+        {_, Ts0} = S0 = scheduler:get_sample_all(),
+        _ = lists:sum(lists:seq(1, 10000)),
+        {_, Ts1} = S1 = scheduler:get_sample_all(),
+        U = scheduler:utilization(S0, S1),
+        check(U),
+        Diffs = [{A1 - A0, T1 - T0} ||
+                    {{Tag, I, A0, T0}, {Tag, I, A1, T1}} <- lists:zip(Ts0, Ts1),
+                    Tag =:= normal orelse Tag =:= cpu],
+        A = lists:sum([Adiff || {Adiff, _} <- Diffs]),
+        T = lists:sum([Tdiff || {_, Tdiff} <- Diffs]),
+        true = A > 0,
+        true = T > 0,
+        Total = A / T,
+        {total, Total, _} = lists:keyfind(total, 1, U),
+        case erlang:system_info(logical_processors_available) of
+            unknown ->
+                false = lists:keymember(weighted, 1, U);
+            LPA ->
+                Capacity = case erlang:system_info(cpu_quota) of
+                               Quota when is_integer(Quota), Quota > 0 ->
+                                   min(LPA, Quota);
+                               _ -> LPA
+                           end,
+                N = length(Diffs),
+                Expected = Total * (N / Capacity),
+                {weighted, Weighted, _} = lists:keyfind(weighted, 1, U),
+                true = abs(Weighted - Expected) < 1.0e-9
+        end,
+        ok
+    after
+        _ = erlang:system_flag(scheduler_wall_time, false)
+    end.
 
 
 check([{total, Tf, Ts} | List]=U) ->
