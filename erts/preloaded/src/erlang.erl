@@ -9270,16 +9270,29 @@ The possible flags are:
   weighted against maximum amount of available CPU time:
 
   ```erlang
-  > WeightedSchedulerUtilization = (TotalSchedulerUtilization
-                                    * (erlang:system_info(schedulers)
-                                       + erlang:system_info(dirty_cpu_schedulers)))
-                                   / erlang:system_info(logical_processors_available).
+  > CpuCapacity = case erlang:system_info(logical_processors_available) of
+        unknown -> unknown;
+        LPA ->
+            case erlang:system_info(cpu_quota) of
+                Quota when is_integer(Quota), Quota > 0 -> min(LPA, Quota);
+                _ -> LPA
+            end
+    end,
+    WeightedSchedulerUtilization = case CpuCapacity of
+        unknown -> unknown;
+        _ -> (TotalSchedulerUtilization
+              * (erlang:system_info(schedulers)
+                 + erlang:system_info(dirty_cpu_schedulers))) / CpuCapacity
+    end.
   0.9769136803764825
   ```
 
   This weighted scheduler utilization will reach `1.0` when schedulers are active
-  the same amount of time as maximum available CPU time. If more schedulers exist
-  than available logical processors, this value may be greater than `1.0`.
+  the same amount of time as maximum available CPU time, using the minimum of
+  `logical_processors_available` and a known `cpu_quota` as CPU capacity, or
+  `logical_processors_available` when the quota is unknown. The value may be
+  greater than `1.0` when scheduler active time exceeds the available CPU time;
+  it cannot be calculated when `logical_processors_available` is `unknown`.
 
   As of ERTS version 9.0, the Erlang runtime system will as default have more
   schedulers than logical processors. This due to the dirty schedulers.
