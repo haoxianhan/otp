@@ -473,7 +473,13 @@ add_job(Name, TopCase, Skip) ->
 	    ".." -> "parent_dir";
 	    Other -> Other
 	end,
-    Dir = filename:absname(SuiteName),
+    %% SuiteName stays the job id, including a path from add_spec/1 or an
+    %% atom from add_case/3. filename:absname/1 accepts both. Only the
+    %% final component is a directory name, so a long but legal path is
+    %% not collapsed into the parent directory.
+    Abs = filename:absname(SuiteName),
+    Dir = filename:join(filename:dirname(Abs),
+			ct_util:job_log_stem(filename:basename(Abs))),
     controller_call({add_job,Dir,SuiteName,TopCase,Skip}).
 
 controller_call(Arg) ->
@@ -1653,6 +1659,16 @@ start_log_file() ->
 	MkDirError ->
 	    log_file_error(MkDirError, Dir)
     end,
+    %% Link text and the sidecar use the historical directory basename.
+    %% The job id may be a path or an atom; the basename is what indexes
+    %% showed before this change.
+    Leaf = filename:basename(filename:absname(get(test_server_name))),
+    case ct_util:save_job_log_name(Dir, Leaf) of
+	ok ->
+	    ok;
+	{error, SaveError} ->
+	    log_file_error(SaveError, filename:join(Dir, "ct_job_name"))
+    end,
     TestDir = timestamp_filename_get(filename:join(Dir, "run.")),
     TestDir1 =
 	case file:make_dir(TestDir) of
@@ -1714,11 +1730,11 @@ start_log_file() ->
     RedirectLink = filename:join(TopDir, ?suitelog_latest_name ++ ?html_ext),
     make_html_link(RedirectLink, HtmlName, redirect),
 
+    LogName = Leaf ++ ?logdir_ext,
     make_html_link(filename:absname(?last_test ++ ?html_ext),
-		   HtmlName, filename:basename(Dir)),
+		   HtmlName, LogName),
     LinkName = filename:join(Dir, ?last_link),
-    make_html_link(LinkName ++ ?html_ext, HtmlName,
-		   filename:basename(Dir)),
+    make_html_link(LinkName ++ ?html_ext, HtmlName, LogName),
 
     PrivDir = filename:join(TestDir1, ?priv_dir),
     ok = file:make_dir(PrivDir),

@@ -1447,7 +1447,7 @@ report(What,Data) ->
 	loginfo ->
 	    %% logfiles and directories have been created for a test and the
 	    %% top level test index page needs to be refreshed
-	    TestName = filename:basename(?val(topdir, Data), ".logs"),
+	    TestName = ct_util:job_log_name(?val(topdir, Data)),
 	    RunDir = ?val(rundir, Data),
 	    _ = ct_logs:make_all_suites_index({TestName,RunDir},unknown),
 	    ok;

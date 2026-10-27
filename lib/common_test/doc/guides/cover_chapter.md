@@ -239,7 +239,11 @@ ct_cover:cross_cover_analyse(Level, [{s1,S1LogDir},{s2,S2LogDir}]).
 ```
 
 Here, `S1LogDir` and `S2LogDir` are the directories named `<TestName>.logs` for
-each test respectively.
+each test respectively. If that final path component is longer than 255 bytes
+in the filesystem's native encoding, Common Test shortens the component and
+records the original basename in `ct_job_name` in that directory. HTML indexes
+still show the original basename. Parent directories in the name are not
+shortened.
 
 Notice the tags `s1` and `s2`, which are used in the cover specification file
 and in the call to `ct_cover:cross_cover_analyse/2`. The purpose of these is

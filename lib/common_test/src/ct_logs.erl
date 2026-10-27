@@ -1372,7 +1372,7 @@ make_last_run_index([Name|Rest], Result, TotSucc, TotFail,
             make_last_run_index(Rest, Result, TotSucc, TotFail,
                                 UserSkip, AutoSkip, TotNotBuilt, TotElapsedTime, Missing);
         LogDirs ->
-            SuiteName = filename:rootname(filename:basename(Name)),
+            SuiteName = ct_util:job_log_name(Name),
             {Result1,TotSucc1,TotFail1,UserSkip1,AutoSkip1,TotNotBuilt1,TotElapsedTime1} =
                 make_last_run_index1(SuiteName, LogDirs, Result,
                                      TotSucc, TotFail,
@@ -2321,7 +2321,9 @@ runentry(Dir, Totals={Node,Label,Logs,
 		    N -> integer_to_list(N)
 		end,
 
-    RootNames = lists:map(fun(F) -> filename:rootname(F,?logdir_ext) end, Logs),
+    %% Logs entries are physical "*.logs" basenames. Map them back to the
+    %% logical job name so all_runs.html groups and displays that identity.
+    RootNames = [ct_util:job_log_name(filename:join(Dir, F)) || F <- Logs],
     TestNames = lists:flatten(lists:join(", ", RootNames)),
     TestNamesTrunc =
 	if length(TestNames) < ?testname_width ->
@@ -2655,7 +2657,7 @@ sort_and_filter_logdirs(Dirs) ->
 
 %% sort and filter directories (no cache)
 sort_and_filter_logdirs1([Dir|Dirs],Groups) ->
-    TestName = filename:rootname(filename:basename(Dir)),
+    TestName = ct_util:job_log_name(Dir),
     case filelib:wildcard(filename:join(Dir,"run.*")) of
 	RunDirs = [_|_] ->
 	    Groups1 = sort_and_filter_logdirs2(TestName,RunDirs,Groups),
@@ -2695,7 +2697,7 @@ dir_diff_tests(LogDirs, #log_cache{tests = CachedTests}) ->
 
 dir_diff_tests([LogDir|LogDirs], CachedTests, NewAdded, DeletedTests,
 	       ValidLast, InvalidLast) ->
-    TestName = filename:rootname(filename:basename(LogDir)),
+    TestName = ct_util:job_log_name(LogDir),
     Time = datestr_from_dirname(LogDir),
     %% check if the test already exists in the cache
     {New,DeletedTests1,ValidLast1,InvalidLast1} =

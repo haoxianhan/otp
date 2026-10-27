@@ -76,6 +76,8 @@
 -export([get_profile_data/0, get_profile_data/1,
 	 get_profile_data/2, open_url/3]).
 
+-export([job_log_stem/1, save_job_log_name/2, job_log_name/1]).
+
 -include("ct.hrl").
 -include("ct_event.hrl").
 -include("ct_util.hrl").
@@ -83,6 +85,20 @@
 -define(default_verbosity, [{default,?MAX_VERBOSITY},
 			    {'$unspecified',?MAX_VERBOSITY}]).
 -define(default_custom_stylesheet, undefined).
+
+%% POSIX NAME_MAX. "<stem>.logs" is counted in native filename bytes.
+%% ".logs" is 5 ASCII bytes. A shortened stem ends with $~ and 32 hex
+%% digits (33 ASCII bytes), so the readable prefix gets the rest.
+-define(job_log_name_max, 255).
+-define(job_log_ext, ".logs").
+-define(job_log_ext_bytes, 5).
+-define(job_log_marker_bytes, 33).
+-define(job_log_prefix_max,
+	(?job_log_name_max - ?job_log_ext_bytes - ?job_log_marker_bytes)).
+%% Present only when the directory stem is not the logical job name.
+%% Contents are the logical name in UTF-8, with no header. No file means
+%% the basename without ".logs" is the name (short jobs and older logs).
+-define(job_name_file, "ct_job_name").
 
 -record(suite_data, {key,name,value}).
 
@@ -1088,6 +1104,111 @@ cast(Msg) ->
 
 seconds(T) ->
     test_server:seconds(T).
+
+%%%-----------------------------------------------------------------
+%%% Physical job-log directory stem.
+%%%
+%%% The logical name stays the test_server job id and the index identity.
+%%% The directory component is shortened only when "<name>.logs" does not
+%%% fit in NAME_MAX native bytes. The short form is a codepoint-aligned
+%%% prefix, $~, and the MD5 of the UTF-8 logical name, so one logical name
+%%% keeps one directory and two long names that share a prefix do not.
+
+job_log_stem(Name) ->
+    case native_bytes(Name ++ ?job_log_ext) of
+	Bin when is_binary(Bin), byte_size(Bin) =< ?job_log_name_max ->
+	    Name;
+	Bin when is_binary(Bin) ->
+	    shortened_job_stem(Name);
+	_ ->
+	    %% Cannot encode the original name. Leave it unchanged so
+	    %% file:make_dir reports that failure instead of a hashed path.
+	    Name
+    end.
+
+save_job_log_name(LogDir, Logical) ->
+    File = filename:join(LogDir, ?job_name_file),
+    case filename:basename(LogDir, ?job_log_ext) =:= Logical of
+	true ->
+	    %% See shortened_log_stem/1. A short name that merely looks
+	    %% shortened must not keep a stale sidecar.
+	    _ = file:delete(File),
+	    ok;
+	false ->
+	    file:write_file(File,
+			    unicode:characters_to_binary(Logical, unicode, utf8))
+    end.
+
+job_log_name(LogDir) ->
+    Fallback = filename:basename(LogDir, ?job_log_ext),
+    %% Ordinary and historical directories have no sidecar. Reading one
+    %% file per job on every cached index rebuild is avoided by looking
+    %% at the stem first. A shortened stem always ends in "~" and 32
+    %% lowercase hex digits; anything else keeps the basename.
+    case shortened_log_stem(Fallback) of
+	false ->
+	    Fallback;
+	true ->
+	    read_saved_job_name(LogDir, Fallback)
+    end.
+
+%% A legal short name can also end with that marker. save_job_log_name/2
+%% deletes a stale sidecar in that case. Without the delete, this clause
+%% would present the previous logical name instead of the short name.
+shortened_log_stem(Stem) ->
+    case string:find(Stem, "~", trailing) of
+	[$~ | Hex] ->
+	    length(Hex) =:= 32 andalso lists:all(fun is_hex_digit/1, Hex);
+	_ ->
+	    false
+    end.
+
+is_hex_digit(C) when C >= $0, C =< $9 -> true;
+is_hex_digit(C) when C >= $a, C =< $f -> true;
+is_hex_digit(_) -> false.
+
+read_saved_job_name(LogDir, Fallback) ->
+    case file:read_file(filename:join(LogDir, ?job_name_file)) of
+	{ok, Utf8} ->
+	    case unicode:characters_to_list(Utf8, utf8) of
+		Name when is_list(Name), Name =/= [] ->
+		    Name;
+		_ ->
+		    Fallback
+	    end;
+	_ ->
+	    Fallback
+    end.
+
+shortened_job_stem(Name) ->
+    Digest = binary:encode_hex(erlang:md5(unicode:characters_to_binary(Name, unicode, utf8)),
+			       lowercase),
+    native_prefix(Name, ?job_log_prefix_max) ++ [$~ | binary_to_list(Digest)].
+
+native_bytes(Chars) ->
+    unicode:characters_to_binary(Chars, unicode, file:native_name_encoding()).
+
+native_prefix(Name, Max) ->
+    case native_bytes(Name) of
+	Bin when is_binary(Bin), byte_size(Bin) =< Max ->
+	    Name;
+	Bin when is_binary(Bin) ->
+	    <<Cut:Max/binary, _/binary>> = Bin,
+	    unicode:characters_to_list(valid_native_prefix(Cut));
+	_ ->
+	    []
+    end.
+
+valid_native_prefix(Cut) ->
+    Enc = file:native_name_encoding(),
+    case unicode:characters_to_binary(Cut, Enc, unicode) of
+	Good when is_binary(Good) ->
+	    Good;
+	{incomplete, Good, _} ->
+	    Good;
+	{error, Good, _} ->
+	    Good
+    end.
 
 abs_name("/") ->
     "/";
